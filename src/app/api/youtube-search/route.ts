@@ -1,113 +1,106 @@
 import { NextResponse } from "next/server";
 
-interface OEmbedResponse {
+// Invidious instances to try (fallback chain)
+const INVIDIOUS_INSTANCES = [
+  "https://inv.tux.pizza",
+  "https://invidious.fdn.fr",
+  "https://vid.puffyan.us",
+  "https://invidious.nerdvpn.de",
+  "https://yt.artemislena.eu",
+];
+
+interface InvidiousVideo {
+  videoId: string;
   title: string;
-  author_name: string;
-  thumbnail_url: string;
+  author: string;
+  videoThumbnails: Array<{ url: string; width: number; height: number }>;
+  lengthSeconds: number;
+  viewCount: number;
 }
 
-// Extract unique video IDs from YouTube search HTML
-function extractVideoIds(html: string, max: number): string[] {
-  const ids: string[] = [];
-  const seen = new Set<string>();
+// Try fetching from Invidious instances with fallback
+async function fetchFromInvidious(query: string, limit: number): Promise<InvidiousVideo[]> {
+  for (const instance of INVIDIOUS_INSTANCES) {
+    try {
+      const url = `${instance}/api/v1/search?q=${encodeURIComponent(query)}&type=video&sort_by=relevance&page=1`;
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(8000),
+        headers: {
+          "User-Agent": "FreeWave/1.0",
+          Accept: "application/json",
+        },
+      });
 
-  // Primary pattern: "videoId":"XXXXXXX"
-  const re = /"videoId":"([a-zA-Z0-9_-]{11})"/g;
-  let m;
-  while ((m = re.exec(html)) !== null && ids.length < max) {
-    if (!seen.has(m[1])) {
-      seen.add(m[1]);
-      ids.push(m[1]);
+      if (!res.ok) continue;
+
+      const data = await res.json();
+      const videos: InvidiousVideo[] = (data || [])
+        .filter((item: Record<string, unknown>) => item.type === "video" && item.videoId)
+        .slice(0, limit);
+
+      if (videos.length > 0) return videos;
+    } catch {
+      // Try next instance
     }
   }
-  return ids;
+  return [];
 }
 
-// Fetch metadata for a single video via oEmbed (no API key needed)
-async function getVideoMeta(videoId: string): Promise<OEmbedResponse | null> {
-  try {
-    const res = await fetch(
-      `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`,
-      {
-        signal: AbortSignal.timeout(5000),
-        headers: { "User-Agent": "FreeWave/1.0" },
-      }
-    );
-    if (res.ok) return await res.json();
-  } catch {
-    // skip
-  }
-  return null;
+// Get best thumbnail from Invidious response
+function getBestThumbnail(thumbnails: InvidiousVideo["videoThumbnails"]): string {
+  if (!thumbnails || thumbnails.length === 0) return "";
+  // Prefer medium quality
+  const medium = thumbnails.find((t) => t.width >= 320 && t.width < 480);
+  const high = thumbnails.find((t) => t.width >= 480);
+  return (medium || high || thumbnails[0]).url;
 }
 
-// GET /api/youtube-search?q=query&limit=12
+// Clean up YouTube title (remove brackets, quotes, etc.)
+function cleanTitle(title: string): string {
+  return title
+    .replace(/\[.*?\]/g, "")
+    .replace(/".*?"/g, "")
+    .replace(/\(.*?(official|audio|lyric|video|hd|4k|mv|clip).*?\)/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Clean up artist name
+function cleanArtist(author: string): string {
+  return author
+    .replace(/ - Topic$/, "")
+    .replace(/VEVO$/, "VEVO")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// GET /api/youtube-search?q=query&limit=10
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("q");
-  const limit = parseInt(searchParams.get("limit") || "8", 10);
+  const limit = parseInt(searchParams.get("limit") || "10", 10);
 
   if (!query || query.trim().length === 0) {
     return NextResponse.json({ tracks: [] });
   }
 
   try {
-    // Step 1: Scrape YouTube search page for video IDs
-    const searchRes = await fetch(
-      `https://www.youtube.com/results?search_query=${encodeURIComponent(query + " music")}`,
-      {
-        next: { revalidate: 0 },
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-        signal: AbortSignal.timeout(12000),
-      }
-    );
+    const videos = await fetchFromInvidious(query + " music audio", limit);
 
-    if (!searchRes.ok) {
+    if (videos.length === 0) {
       return NextResponse.json({ tracks: [] });
     }
 
-    const html = await searchRes.text();
-    const videoIds = extractVideoIds(html, limit);
-
-    if (videoIds.length === 0) {
-      return NextResponse.json({ tracks: [] });
-    }
-
-    // Step 2: Fetch metadata (title, artist, thumbnail) via oEmbed for each ID
-    // Do this in parallel with a concurrency limit
-    const BATCH = 4;
-    const metaResults: (OEmbedResponse | null)[] = [];
-
-    for (let i = 0; i < videoIds.length; i += BATCH) {
-      const batch = videoIds.slice(i, i + BATCH);
-      const results = await Promise.all(batch.map((id) => getVideoMeta(id)));
-      metaResults.push(...results);
-    }
-
-    // Step 3: Build track objects
-    const tracks = videoIds.map((videoId, idx) => {
-      const meta = metaResults[idx];
-      return {
-        id: `yt-${videoId}`,
-        title: meta
-          ? meta.title
-              .replace(/\[.*?\]/g, "")
-              .replace(/".*?"/g, "")
-              .replace(/\(.*?\)/g, "")
-              .replace(/\s+/g, " ")
-              .trim()
-          : `YouTube Video`,
-        artist: meta ? meta.author_name.replace(/ - Topic$/, "").replace(/VEVO$/, "VEVO") : "Unknown",
-        artwork: meta?.thumbnail_url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-        source: "youtube" as const,
-        videoId,
-        duration: null, // oEmbed doesn't return duration; YouTube player will report it
-        previewUrl: null,
-      };
-    });
+    const tracks = videos.map((video) => ({
+      id: `yt-${video.videoId}`,
+      title: cleanTitle(video.title),
+      artist: cleanArtist(video.author),
+      artwork: getBestThumbnail(video.videoThumbnails) || `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+      source: "youtube" as const,
+      videoId: video.videoId,
+      duration: video.lengthSeconds > 0 ? video.lengthSeconds : null,
+      previewUrl: null as null,
+    }));
 
     return NextResponse.json({ tracks });
   } catch (error) {

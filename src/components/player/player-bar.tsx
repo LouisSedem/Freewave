@@ -184,7 +184,12 @@ export function PlayerBar() {
     };
   }, [next, startYTProgressPolling, stopYTProgressPolling]);
 
-  // Handle track changes - YouTube
+  // Reset YouTube video ref when track changes entirely
+  useEffect(() => {
+    currentVideoIdRef.current = null;
+  }, [currentTrack?.id]);
+
+  // Handle track changes - YouTube (also handles upgrade from iTunes mid-playback)
   useEffect(() => {
     const videoId = currentTrack?.videoId;
     if (!videoId || currentTrack?.source !== "youtube") return;
@@ -192,6 +197,13 @@ export function PlayerBar() {
     // Don't reload if same video
     if (currentVideoIdRef.current === videoId) return;
     currentVideoIdRef.current = videoId;
+
+    // Stop any iTunes audio that might be playing
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+    }
+    stopYTProgressPolling();
 
     // Wait for YT API + player to be ready
     let retries = 0;
@@ -214,7 +226,7 @@ export function PlayerBar() {
       }
     };
     tryLoadVideo();
-  }, [currentTrack?.videoId, currentTrack?.source, setDuration, setProgress]);
+  }, [currentTrack?.videoId, currentTrack?.source, setDuration, setProgress, stopYTProgressPolling]);
 
   // Sync play/pause with YouTube player
   useEffect(() => {
@@ -244,9 +256,12 @@ export function PlayerBar() {
     }
   }, [volume, isMuted]);
 
-  // Handle track changes - iTunes
+  // Handle track changes - iTunes (only for non-upgraded tracks)
   useEffect(() => {
     if (!currentTrack) return;
+
+    // Skip if track was upgraded to YouTube (the YouTube effect will handle it)
+    if (currentTrack.source === "youtube") return;
 
     if (currentTrack.source === "itunes" && currentTrack.previewUrl) {
       // Stop YouTube progress polling when playing iTunes
@@ -273,7 +288,7 @@ export function PlayerBar() {
         audioRef.current.play().catch(() => {});
       }
     }
-  }, [currentTrack, isPlaying, next, setProgress, setDuration, stopYTProgressPolling]);
+  }, [currentTrack?.id, currentTrack?.source, currentTrack?.previewUrl, isPlaying, next, setProgress, setDuration, stopYTProgressPolling]);
 
   // Sync play/pause with iTunes audio
   useEffect(() => {

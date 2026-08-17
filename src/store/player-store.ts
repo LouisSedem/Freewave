@@ -29,8 +29,12 @@ export interface PlayerState {
   shuffle: boolean;
   repeat: "off" | "all" | "one";
 
+  // Upgrade state
+  isUpgrading: boolean;
+
   // Actions
   playTrack: (track: Track, queue?: Track[]) => void;
+  upgradeTrackToYouTube: (videoId: string, duration: number | null) => void;
   pause: () => void;
   resume: () => void;
   togglePlay: () => void;
@@ -55,16 +59,80 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   duration: 0,
   shuffle: false,
   repeat: "off",
+  isUpgrading: false,
 
   playTrack: (track, queue) => {
     const newQueue = queue || [track];
     const index = newQueue.findIndex((t) => t.id === track.id);
-    set({
-      currentTrack: track,
-      queue: newQueue,
-      queueIndex: index >= 0 ? index : 0,
-      isPlaying: true,
-      progress: 0,
+
+    // If this is an iTunes track without a videoId, try to upgrade it
+    if (track.source === "itunes" && !track.videoId) {
+      // Set the track immediately (will play 30s preview as fallback)
+      set({
+        currentTrack: track,
+        queue: newQueue,
+        queueIndex: index >= 0 ? index : 0,
+        isPlaying: true,
+        progress: 0,
+        isUpgrading: true,
+      });
+
+      // Fire-and-forget: try to find YouTube videoId
+      fetch(`/api/youtube-lookup?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.videoId) {
+            // Upgrade the current track AND the queue entry
+            const upgraded: Track = {
+              ...track,
+              source: "youtube",
+              videoId: data.videoId,
+              duration: data.duration || track.duration,
+            };
+            const { queueIndex: qi } = get();
+            set((state) => {
+              const updatedQueue = [...state.queue];
+              if (qi >= 0 && qi < updatedQueue.length) {
+                updatedQueue[qi] = upgraded;
+              }
+              return {
+                currentTrack: upgraded,
+                queue: updatedQueue,
+                isUpgrading: false,
+              };
+            });
+          } else {
+            set({ isUpgrading: false });
+          }
+        })
+        .catch(() => set({ isUpgrading: false }));
+    } else {
+      set({
+        currentTrack: track,
+        queue: newQueue,
+        queueIndex: index >= 0 ? index : 0,
+        isPlaying: true,
+        progress: 0,
+        isUpgrading: false,
+      });
+    }
+  },
+
+  upgradeTrackToYouTube: (videoId, duration) => {
+    const { currentTrack, queueIndex } = get();
+    if (!currentTrack) return;
+    const upgraded: Track = {
+      ...currentTrack,
+      source: "youtube",
+      videoId,
+      duration: duration || currentTrack.duration,
+    };
+    set((state) => {
+      const updatedQueue = [...state.queue];
+      if (queueIndex >= 0 && queueIndex < updatedQueue.length) {
+        updatedQueue[queueIndex] = upgraded;
+      }
+      return { currentTrack: upgraded, queue: updatedQueue };
     });
   },
 
