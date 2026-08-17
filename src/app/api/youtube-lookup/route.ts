@@ -1,3 +1,5 @@
+export const runtime = 'edge';
+
 import { NextResponse } from "next/server";
 
 // Quick lookup: find a single YouTube videoId using innertube API

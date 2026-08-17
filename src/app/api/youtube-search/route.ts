@@ -1,3 +1,5 @@
+export const runtime = 'edge';
+
 import { NextResponse } from "next/server";
 
 // YouTube Innertube API — the same API YouTube's own website uses internally.
