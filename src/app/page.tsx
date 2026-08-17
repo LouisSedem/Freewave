@@ -165,7 +165,7 @@ function TrackRow({
 
       {/* Source badge */}
       <span className="hidden md:inline text-[10px] text-[#727272] bg-white/5 px-2 py-0.5 rounded-full flex-shrink-0">
-        {track.source === "itunes" ? "Apple Music" : "YouTube"}
+        {track.source === "itunes" ? "30s Preview" : "Full Track"}
       </span>
 
       {/* Duration */}

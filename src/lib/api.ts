@@ -53,7 +53,7 @@ export async function searchITunes(query: string, limit = 12): Promise<Track[]> 
   }
 }
 
-// Search YouTube via server-side Invidious proxy
+// Search YouTube via server-side scraping + oEmbed (no API key needed)
 export async function searchYouTube(query: string, maxResults = 6): Promise<Track[]> {
   try {
     const res = await fetch(`/api/youtube-search?q=${encodeURIComponent(query)}&limit=${maxResults}`);
@@ -66,13 +66,18 @@ export async function searchYouTube(query: string, maxResults = 6): Promise<Trac
   }
 }
 
-// Combined search: iTunes (with previews) + YouTube (full playback)
+// Combined search: YouTube first (full tracks), then iTunes (30s previews as backup)
 export async function searchAll(query: string): Promise<Track[]> {
-  const [itunesResults, youtubeResults] = await Promise.all([
-    searchITunes(query, 12),
-    searchYouTube(query, 6).catch(() => []),
+  const [youtubeResults, itunesResults] = await Promise.all([
+    searchYouTube(query, 10).catch(() => []),
+    searchITunes(query, 6),
   ]);
 
-  // Merge results — iTunes first (has previews), then YouTube
-  return [...itunesResults, ...youtubeResults];
+  // YouTube results first (full playback via IFrame), then iTunes previews
+  if (youtubeResults.length > 0) {
+    return [...youtubeResults, ...itunesResults];
+  }
+
+  // Fallback to iTunes-only if YouTube fails
+  return itunesResults;
 }
