@@ -1,8 +1,18 @@
 "use client";
 
-import React from "react";
+import React, { useState, useCallback } from "react";
 import { Home, Search, Library, Settings, Plus, Heart, Music2 } from "lucide-react";
 import { useView } from "@/store/view-context";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 const NAV_ITEMS = [
   { id: "home" as const, label: "Home", icon: Home },
@@ -12,6 +22,29 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const { view, setView } = useView();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [playlistName, setPlaylistName] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+
+  const handleCreatePlaylist = useCallback(async () => {
+    if (!playlistName.trim()) return;
+    setIsCreating(true);
+    try {
+      const res = await fetch("/api/playlists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: playlistName.trim() }),
+      });
+      if (res.ok) {
+        setPlaylistName("");
+        setCreateOpen(false);
+      }
+    } catch {
+      // Silently fail
+    } finally {
+      setIsCreating(false);
+    }
+  }, [playlistName]);
 
   return (
     <aside className="hidden md:flex w-[280px] flex-shrink-0 bg-black flex-col overflow-hidden">
@@ -57,7 +90,11 @@ export function Sidebar() {
           <p className="text-[11px] text-[#b3b3b3] uppercase tracking-[0.16em] font-semibold">
             Playlists
           </p>
-          <button className="text-[#b3b3b3] hover:text-white transition-colors p-1 hover:bg-white/10 rounded-full">
+          <button
+            onClick={() => setCreateOpen(true)}
+            className="text-[#b3b3b3] hover:text-white transition-colors p-1 hover:bg-white/10 rounded-full"
+            aria-label="Create playlist"
+          >
             <Plus size={16} />
           </button>
         </div>
@@ -78,6 +115,44 @@ export function Sidebar() {
           Settings
         </button>
       </div>
+
+      {/* Create Playlist Dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="bg-[#282828] border-[#3e3e3e] text-white">
+          <DialogHeader>
+            <DialogTitle>Create Playlist</DialogTitle>
+            <DialogDescription className="text-[#b3b3b3]">
+              Give your new playlist a name.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={playlistName}
+            onChange={(e) => setPlaylistName(e.target.value)}
+            placeholder="My awesome playlist"
+            className="bg-[#3e3e3e] border-[#535353] text-white placeholder:text-[#727272]"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleCreatePlaylist();
+            }}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setCreateOpen(false)}
+              className="text-[#b3b3b3] hover:text-white"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreatePlaylist}
+              disabled={!playlistName.trim() || isCreating}
+              className="bg-[#1db954] hover:bg-[#1ed760] text-black font-semibold"
+            >
+              {isCreating ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }

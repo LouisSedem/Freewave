@@ -25,6 +25,7 @@ export const metadata: Metadata = {
   icons: {
     icon: "/favicon.svg",
   },
+  manifest: "/manifest.json",
   openGraph: {
     title: "FreeWave — Stream Free Music",
     description: "Discover and stream free music across every genre.",

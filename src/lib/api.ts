@@ -11,15 +11,6 @@ export interface ITunesSearchResult {
   kind: string;
 }
 
-export interface YouTubeSearchResult {
-  id: { videoId: string };
-  snippet: {
-    title: string;
-    channelTitle: string;
-    thumbnails: { medium: { url: string }; high: { url: string } };
-  };
-}
-
 export interface SearchResults {
   tracks: Track[];
 }
@@ -62,43 +53,26 @@ export async function searchITunes(query: string, limit = 12): Promise<Track[]> 
   }
 }
 
-// Search YouTube for music videos
-export async function searchYouTube(query: string, maxResults = 12): Promise<Track[]> {
+// Search YouTube via server-side Invidious proxy
+export async function searchYouTube(query: string, maxResults = 6): Promise<Track[]> {
   try {
-    const res = await fetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(
-        query + " music"
-      )}&type=video&videoCategoryId=10&maxResults=${maxResults}&key=AIzaSyDummyKey`
-    );
-
-    // If API fails (likely due to key), return empty
-    if (!res.ok) {
-      return [];
-    }
-
+    const res = await fetch(`/api/youtube-search?q=${encodeURIComponent(query)}&limit=${maxResults}`);
+    if (!res.ok) return [];
     const data = await res.json();
-    return (data.items || []).map((item: YouTubeSearchResult) => ({
-      id: `yt-${item.id.videoId}`,
-      title: item.snippet.title.replace(/\[.*?\]/g, "").replace(/".*?"/g, "").replace(/\(.*?\)/g, "").trim(),
-      artist: item.snippet.channelTitle,
-      artwork: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.medium.url,
-      source: "youtube" as const,
-      videoId: item.id.videoId,
-      duration: null,
-    }));
+    return (data.tracks || []) as Track[];
   } catch (e) {
     console.error("YouTube search failed:", e);
     return [];
   }
 }
 
-// Combined search
+// Combined search: iTunes (with previews) + YouTube (full playback)
 export async function searchAll(query: string): Promise<Track[]> {
-  const [itunesResults] = await Promise.all([searchITunes(query)]);
-  
-  // Try YouTube too but don't block on it
-  const youtubeResults = await searchYouTube(query).catch(() => []);
+  const [itunesResults, youtubeResults] = await Promise.all([
+    searchITunes(query, 12),
+    searchYouTube(query, 6).catch(() => []),
+  ]);
 
-  // Merge results - iTunes first (has previews), then YouTube
+  // Merge results — iTunes first (has previews), then YouTube
   return [...itunesResults, ...youtubeResults];
 }

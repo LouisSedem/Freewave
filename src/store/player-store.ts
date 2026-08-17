@@ -9,6 +9,7 @@ export interface Track {
   source: "youtube" | "itunes";
   videoId: string | null;
   duration: number | null;
+  previewUrl?: string;
   album?: string;
 }
 
