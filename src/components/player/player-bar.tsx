@@ -130,13 +130,9 @@ export function PlayerBar() {
     if (apiLoadedRef.current) return;
     apiLoadedRef.current = true;
 
-    const tag = document.createElement("script");
-    tag.src = "https://www.youtube.com/iframe_api";
-    document.head.appendChild(tag);
-
-    window.onYouTubeIframeAPIReady = () => {
-      // Create the player instance once the API is loaded
-      if (!ytPlayerRef.current) {
+    const createPlayer = () => {
+      if (ytPlayerRef.current) return;
+      try {
         ytPlayerRef.current = new window.YT.Player("yt-player", {
           height: "1",
           width: "1",
@@ -158,7 +154,6 @@ export function PlayerBar() {
               // YT.PlayerState: PLAYING=1, PAUSED=2, ENDED=0, BUFFERING=3
               if (event.data === window.YT.PlayerState.ENDED) {
                 stopYTProgressPolling();
-                // Use setTimeout to let the store update before triggering next
                 setTimeout(() => next(), 100);
               } else if (event.data === window.YT.PlayerState.PLAYING) {
                 startYTProgressPolling();
@@ -168,8 +163,21 @@ export function PlayerBar() {
             },
           },
         });
+      } catch (e) {
+        console.error("[FreeWave] Failed to create YT player:", e);
       }
     };
+
+    // If the API is already loaded (from a previous page load), create player immediately
+    if (window.YT && window.YT.Player) {
+      createPlayer();
+    } else {
+      // Set callback BEFORE loading the script to avoid race condition
+      window.onYouTubeIframeAPIReady = createPlayer;
+      const tag = document.createElement("script");
+      tag.src = "https://www.youtube.com/iframe_api";
+      document.head.appendChild(tag);
+    }
 
     return () => {
       stopYTProgressPolling();
@@ -186,15 +194,23 @@ export function PlayerBar() {
     currentVideoIdRef.current = videoId;
 
     // Wait for YT API + player to be ready
+    let retries = 0;
+    const maxRetries = 50; // 10 seconds max
     const tryLoadVideo = () => {
       const player = ytPlayerRef.current;
       if (player && ytReadyRef.current) {
-        player.loadVideoById(videoId);
-        setDuration(0);
-        setProgress(0);
-      } else {
-        // Retry after a short delay
+        try {
+          player.loadVideoById(videoId);
+          setDuration(0);
+          setProgress(0);
+        } catch (e) {
+          console.error("[FreeWave] Failed to load video:", e);
+        }
+      } else if (retries < maxRetries) {
+        retries++;
         setTimeout(tryLoadVideo, 200);
+      } else {
+        console.warn("[FreeWave] YouTube player not ready after 10s, falling back");
       }
     };
     tryLoadVideo();
