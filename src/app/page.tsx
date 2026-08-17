@@ -116,11 +116,14 @@ function TrackRow({
   };
 
   return (
-    <button
+    <div
       onClick={onPlay}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      className={`w-full flex items-center gap-3 px-3 md:px-4 py-2 rounded-md transition-colors group ${
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onPlay(); }}
+      className={`w-full flex items-center gap-3 px-3 md:px-4 py-2 rounded-md transition-colors group cursor-pointer ${
         isCurrentTrack ? "bg-white/10" : "hover:bg-white/5"
       }`}
     >
@@ -180,7 +183,7 @@ function TrackRow({
           className={isFavorite ? "text-[#1db954] fill-[#1db954]" : "text-[#b3b3b3] hover:text-white"}
         />
       </button>
-    </button>
+    </div>
   );
 }
 
