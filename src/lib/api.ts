@@ -1,9 +1,15 @@
 // FreeWave API utilities
 
-// CORS proxies that work from the browser to fetch YouTube HTML
-const CORS_PROXIES = [
-  (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-];
+// CORS proxy: your own Cloudflare Worker (see /worker/ folder for deploy instructions)
+// Falls back to corsproxy.io for local development
+function getCorsProxyUrl(targetUrl: string): string {
+  // User's own proxy takes priority (set in .env as NEXT_PUBLIC_YT_PROXY_URL)
+  if (process.env.NEXT_PUBLIC_YT_PROXY_URL) {
+    return `${process.env.NEXT_PUBLIC_YT_PROXY_URL}?url=${encodeURIComponent(targetUrl)}`;
+  }
+  // Fallback for local dev only (blocked on production domains)
+  return `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+}
 
 export interface ITunesSearchResult {
   trackId: number;
@@ -136,39 +142,37 @@ function cleanYTArtist(author: string): string {
 async function searchYouTubeViaProxy(query: string, maxResults = 10): Promise<Track[]> {
   const ytUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query + " music audio")}`;
 
-  // Try CORS proxies in order
-  for (const makeProxyUrl of CORS_PROXIES) {
-    try {
-      const proxyUrl = makeProxyUrl(ytUrl);
-      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
-      if (!res.ok) continue;
+  // Try to fetch YouTube HTML through CORS proxy
+  const proxyUrl = getCorsProxyUrl(ytUrl);
+  try {
+    const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(20000) });
+    if (!res.ok) return [];
 
-      const html = await res.text();
-      if (html.length < 10000) continue; // Too small, probably an error page
+    const html = await res.text();
+    if (html.length < 10000) return []; // Too small, probably an error page
 
-      const parsed = parseYTInitialData(html, maxResults);
-      if (parsed.length === 0) continue;
+    const parsed = parseYTInitialData(html, maxResults);
+    if (parsed.length === 0) return [];
 
-      return parsed
-        .filter((v) => {
-          if (v.duration !== null && (v.duration < 60 || v.duration > 600)) return false;
-          return true;
-        })
-        .map((v) => ({
-          id: `yt-${v.videoId}`,
-          title: cleanYTTitle(v.title),
-          artist: cleanYTArtist(v.artist),
-          artwork: v.thumbnail || `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`,
-          source: "youtube" as const,
-          videoId: v.videoId,
-          duration: v.duration,
-          previewUrl: null,
-        }));
-    } catch {
-      // Try next proxy
-    }
+    return parsed
+      .filter((v) => {
+        if (v.duration !== null && (v.duration < 60 || v.duration > 600)) return false;
+        return true;
+      })
+      .map((v) => ({
+        id: `yt-${v.videoId}`,
+        title: cleanYTTitle(v.title),
+        artist: cleanYTArtist(v.artist),
+        artwork: v.thumbnail || `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`,
+        source: "youtube" as const,
+        videoId: v.videoId,
+        duration: v.duration,
+        previewUrl: null,
+      }));
+  } catch (e) {
+    console.error("[FreeWave] YouTube proxy error:", e);
+    return [];
   }
-  return [];
 }
 
 // ─── Fuzzy string matching for smart merge ────────────────────────────
