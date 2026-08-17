@@ -1,46 +1,6 @@
 // FreeWave Music Store - Zustand state management
 import { create } from "zustand";
 
-// Client-side YouTube videoId lookup via JSONP (bypasses CORS + server IP blocks)
-function lookupYouTubeVideoId(title: string, artist: string): Promise<{ videoId: string | null; duration: number | null }> {
-  const apiKey = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY;
-  if (!apiKey) return Promise.resolve({ videoId: null, duration: null });
-
-  return new Promise((resolve) => {
-    const cb = "__ytLU_" + Date.now() + "_" + Math.random().toString(36).slice(2);
-    const timeout = setTimeout(() => { cleanup(); resolve({ videoId: null, duration: null }); }, 10000);
-
-    function cleanup() {
-      clearTimeout(timeout);
-      delete (window as Record<string, unknown>)[cb];
-      document.getElementById(cb)?.remove();
-    }
-
-    (window as Record<string, unknown>)[cb] = (data: Record<string, unknown>) => {
-      cleanup();
-      const items = (data.items || []) as Array<Record<string, unknown>>;
-      const item = items[0];
-      const vid = (item?.id as Record<string, unknown>)?.videoId as string | undefined;
-      resolve({ videoId: vid || null, duration: null });
-    };
-
-    const params = new URLSearchParams({
-      part: "snippet",
-      q: `${artist} ${title} official audio`,
-      type: "video",
-      maxResults: "1",
-      key: apiKey,
-      callback: cb,
-    });
-
-    const script = document.createElement("script");
-    script.id = cb;
-    script.src = `https://www.googleapis.com/youtube/v3/search?${params}`;
-    script.onerror = () => { cleanup(); resolve({ videoId: null, duration: null }); };
-    document.head.appendChild(script);
-  });
-}
-
 export interface Track {
   id: string;
   title: string;
@@ -117,10 +77,11 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         isUpgrading: true,
       });
 
-      // Fire-and-forget: try to find YouTube videoId via JSONP (client-side)
-      lookupYouTubeVideoId(track.title, track.artist).then((data) => {
+      // Fire-and-forget: try to find YouTube videoId via server-side lookup
+      fetch(`/api/youtube-lookup?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`)
+        .then((r) => r.json())
+        .then((data) => {
           if (data.videoId) {
-            // Upgrade the current track AND the queue entry
             const upgraded: Track = {
               ...track,
               source: "youtube",
