@@ -27,7 +27,7 @@ export interface Track {
   previewUrl?: string;
 }
 
-// Search iTunes API for songs
+// Search iTunes API for songs (client-side, always works)
 export async function searchITunes(query: string, limit = 10): Promise<Track[]> {
   try {
     const res = await fetch(
@@ -53,100 +53,125 @@ export async function searchITunes(query: string, limit = 10): Promise<Track[]> 
   }
 }
 
-// Search YouTube via Invidious API (server-side proxy)
-export async function searchYouTube(query: string, maxResults = 10): Promise<Track[]> {
-  try {
-    const res = await fetch(`/api/youtube-search?q=${encodeURIComponent(query)}&limit=${maxResults}`);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.tracks || []) as Track[];
-  } catch (e) {
-    console.error("YouTube search failed:", e);
-    return [];
-  }
+// Search YouTube via JSONP (client-side, bypasses CORS + IP blocks)
+function searchYouTubeJSONP(query: string, maxResults = 10): Promise<Track[]> {
+  const apiKey = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY;
+  if (!apiKey) return Promise.resolve([]);
+
+  return new Promise((resolve) => {
+    const callbackName = "__ytSearch_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve([]);
+    }, 12000);
+
+    function cleanup() {
+      clearTimeout(timeout);
+      delete (window as Record<string, unknown>)[callbackName];
+      const el = document.getElementById(callbackName);
+      if (el) el.remove();
+    }
+
+    (window as Record<string, unknown>)[callbackName] = (data: Record<string, unknown>) => {
+      cleanup();
+      const items = (data.items || []) as Array<Record<string, unknown>>;
+      const tracks: Track[] = items
+        .filter((item) => (item.id as Record<string, unknown>)?.kind === "youtube#video")
+        .map((item) => {
+          const id = (item.id as Record<string, unknown>).videoId as string;
+          const snippet = item.snippet as Record<string, unknown>;
+          const thumbs = snippet?.thumbnails as Record<string, Record<string, string>> | undefined;
+          const thumb = thumbs?.medium || thumbs?.high || thumbs?.default;
+
+          return {
+            id: `yt-${id}`,
+            title: cleanYTTitle((snippet?.title as string) || ""),
+            artist: ((snippet?.channelTitle as string) || "Unknown")
+              .replace(/ - Topic$/, "")
+              .replace(/VEVO$/, "VEVO"),
+            artwork: thumb?.url || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+            source: "youtube" as const,
+            videoId: id,
+            duration: null,
+            previewUrl: null,
+          };
+        });
+      resolve(tracks);
+    };
+
+    const params = new URLSearchParams({
+      part: "snippet",
+      q: query + " music audio",
+      type: "video",
+      maxResults: String(maxResults),
+      key: apiKey,
+      callback: callbackName,
+    });
+
+    const script = document.createElement("script");
+    script.id = callbackName;
+    script.src = `https://www.googleapis.com/youtube/v3/search?${params}`;
+    script.onerror = () => { cleanup(); resolve([]); };
+    document.head.appendChild(script);
+  });
 }
 
-// Fuzzy match: check if two strings share enough words to be considered the same song
+// Fuzzy match: check if two strings share enough words
 function stringsMatch(a: string, b: string, threshold = 0.4): boolean {
   const normalize = (s: string) =>
-    s
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, "")
-      .split(/\s+/)
-      .filter((w) => w.length > 1);
-
+    s.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter((w) => w.length > 1);
   const wordsA = new Set(normalize(a));
   const wordsB = new Set(normalize(b));
-
   if (wordsA.size === 0 || wordsB.size === 0) return false;
-
-  // Count how many words from A appear in B
   let matches = 0;
   for (const word of wordsA) {
     if (wordsB.has(word)) matches++;
   }
-
-  // Also check partial matches (e.g. "lovin" matches "loving")
   for (const wordA of wordsA) {
     for (const wordB of wordsB) {
-      if (
-        wordA !== wordB &&
-        (wordA.startsWith(wordB) || wordB.startsWith(wordA)) &&
-        Math.abs(wordA.length - wordB.length) <= 2
-      ) {
+      if (wordA !== wordB && (wordA.startsWith(wordB) || wordB.startsWith(wordA)) && Math.abs(wordA.length - wordB.length) <= 2) {
         matches += 0.5;
       }
     }
   }
-
-  const score = matches / Math.max(wordsA.size, wordsB.size);
-  return score >= threshold;
+  return matches / Math.max(wordsA.size, wordsB.size) >= threshold;
 }
 
-// Combined search with smart merge: YouTube videoIds + iTunes metadata = full tracks
+function cleanYTTitle(title: string): string {
+  return title
+    .replace(/\[.*?\]/g, "")
+    .replace(/".*?"/g, "")
+    .replace(/\(.*?(official|audio|lyric|video|hd|4k|mv|clip|performance|live).*?\)/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Combined search with smart merge
 export async function searchAll(query: string): Promise<Track[]> {
   const [youtubeResults, itunesResults] = await Promise.all([
-    searchYouTube(query, 12).catch(() => []),
+    searchYouTubeJSONP(query, 12).catch(() => []),
     searchITunes(query, 10),
   ]);
 
-  // Build a map of videoId -> YouTube track for quick lookup
-  const ytByVideoId = new Map<string, Track>();
-  for (const yt of youtubeResults) {
-    if (yt.videoId) ytByVideoId.set(yt.videoId, yt);
-  }
+  // If no YouTube key configured, return iTunes only
+  if (youtubeResults.length === 0) return itunesResults;
 
-  // Step 1: Upgrade iTunes tracks with matching YouTube videoIds
-  // This gives us: iTunes artwork quality + YouTube full-track playback
+  // Smart merge: match iTunes tracks with YouTube results to get videoIds
   const usedVideoIds = new Set<string>();
   const upgradedITunes: Track[] = itunesResults.map((itunes) => {
-    // Try to find a matching YouTube video
     for (const yt of youtubeResults) {
       if (usedVideoIds.has(yt.videoId || "")) continue;
-
       const titleMatch = stringsMatch(itunes.title, yt.title, 0.35);
       const artistMatch = stringsMatch(itunes.artist, yt.artist, 0.3);
-
       if (titleMatch && (artistMatch || yt.artist.toLowerCase().includes(itunes.artist.toLowerCase().split(" ")[0]))) {
         usedVideoIds.add(yt.videoId || "");
-        return {
-          ...itunes,
-          source: "youtube" as const,
-          videoId: yt.videoId,
-          // Keep iTunes duration (more accurate), use YouTube duration as fallback
-          duration: itunes.duration || yt.duration,
-        };
+        return { ...itunes, source: "youtube" as const, videoId: yt.videoId, duration: itunes.duration || yt.duration };
       }
     }
     return itunes;
   });
 
-  // Step 2: Add remaining YouTube results that weren't matched
-  const unmatchedYouTube = youtubeResults.filter(
-    (yt) => !usedVideoIds.has(yt.videoId || "")
-  );
-
-  // Step 3: Combine - upgraded iTunes first (best of both), then unmatched YouTube, then pure iTunes
+  const unmatchedYouTube = youtubeResults.filter((yt) => !usedVideoIds.has(yt.videoId || ""));
   const upgraded = upgradedITunes.filter((t) => t.source === "youtube");
   const pureITunes = upgradedITunes.filter((t) => t.source === "itunes");
 
