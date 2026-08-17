@@ -1,5 +1,6 @@
 // FreeWave Music Store - Zustand state management
 import { create } from "zustand";
+import { searchYouTubeViaProxy } from "@/lib/api";
 
 export interface Track {
   id: string;
@@ -14,25 +15,16 @@ export interface Track {
 }
 
 export interface PlayerState {
-  // Current track
   currentTrack: Track | null;
   queue: Track[];
   queueIndex: number;
-
-  // Player state
   isPlaying: boolean;
   volume: number;
   progress: number;
   duration: number;
-
-  // Shuffle & repeat
   shuffle: boolean;
   repeat: "off" | "all" | "one";
-
-  // Upgrade state
   isUpgrading: boolean;
-
-  // Actions
   playTrack: (track: Track, queue?: Track[]) => void;
   upgradeTrackToYouTube: (videoId: string, duration: number | null) => void;
   pause: () => void;
@@ -65,9 +57,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const newQueue = queue || [track];
     const index = newQueue.findIndex((t) => t.id === track.id);
 
-    // If this is an iTunes track without a videoId, try to upgrade it
+    // If this is an iTunes track without a videoId, try to upgrade it client-side
     if (track.source === "itunes" && !track.videoId) {
-      // Set the track immediately (will play 30s preview as fallback)
       set({
         currentTrack: track,
         queue: newQueue,
@@ -77,16 +68,17 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         isUpgrading: true,
       });
 
-      // Fire-and-forget: try to find YouTube videoId via server-side lookup
-      fetch(`/api/youtube-lookup?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`)
-        .then((r) => r.json())
-        .then((data) => {
-          if (data.videoId) {
+      // Client-side YouTube lookup via CORS proxy (no server involved)
+      const query = `${track.artist} ${track.title} official audio`;
+      searchYouTubeViaProxy(query, 1)
+        .then((results) => {
+          if (results.length > 0 && results[0].videoId) {
+            const yt = results[0];
             const upgraded: Track = {
               ...track,
               source: "youtube",
-              videoId: data.videoId,
-              duration: data.duration || track.duration,
+              videoId: yt.videoId,
+              duration: yt.duration || track.duration,
             };
             const { queueIndex: qi } = get();
             set((state) => {
@@ -94,11 +86,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
               if (qi >= 0 && qi < updatedQueue.length) {
                 updatedQueue[qi] = upgraded;
               }
-              return {
-                currentTrack: upgraded,
-                queue: updatedQueue,
-                isUpgrading: false,
-              };
+              return { currentTrack: upgraded, queue: updatedQueue, isUpgrading: false };
             });
           } else {
             set({ isUpgrading: false });
@@ -120,17 +108,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   upgradeTrackToYouTube: (videoId, duration) => {
     const { currentTrack, queueIndex } = get();
     if (!currentTrack) return;
-    const upgraded: Track = {
-      ...currentTrack,
-      source: "youtube",
-      videoId,
-      duration: duration || currentTrack.duration,
-    };
+    const upgraded: Track = { ...currentTrack, source: "youtube", videoId, duration: duration || currentTrack.duration };
     set((state) => {
       const updatedQueue = [...state.queue];
-      if (queueIndex >= 0 && queueIndex < updatedQueue.length) {
-        updatedQueue[queueIndex] = upgraded;
-      }
+      if (queueIndex >= 0 && queueIndex < updatedQueue.length) updatedQueue[queueIndex] = upgraded;
       return { currentTrack: upgraded, queue: updatedQueue };
     });
   },
@@ -143,8 +124,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     const { queue, queueIndex, shuffle, repeat } = get();
     if (queue.length === 0) return;
     if (shuffle) {
-      const randomIndex = Math.floor(Math.random() * queue.length);
-      set({ queueIndex: randomIndex, currentTrack: queue[randomIndex], progress: 0, isPlaying: true });
+      const i = Math.floor(Math.random() * queue.length);
+      set({ queueIndex: i, currentTrack: queue[i], progress: 0, isPlaying: true });
     } else if (queueIndex < queue.length - 1) {
       set({ queueIndex: queueIndex + 1, currentTrack: queue[queueIndex + 1], progress: 0, isPlaying: true });
     } else if (repeat === "all") {
@@ -157,26 +138,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   previous: () => {
     const { queue, queueIndex, progress } = get();
     if (queue.length === 0) return;
-    if (progress > 3) {
-      set({ progress: 0 });
-    } else if (queueIndex > 0) {
-      set({ queueIndex: queueIndex - 1, currentTrack: queue[queueIndex - 1], progress: 0 });
-    }
+    if (progress > 3) { set({ progress: 0 }); }
+    else if (queueIndex > 0) { set({ queueIndex: queueIndex - 1, currentTrack: queue[queueIndex - 1], progress: 0 }); }
   },
 
   setVolume: (volume) => set({ volume }),
   setProgress: (progress) => set({ progress }),
   setDuration: (duration) => set({ duration }),
   toggleShuffle: () => set((s) => ({ shuffle: !s.shuffle })),
-  cycleRepeat: () =>
-    set((s) => ({
-      repeat: s.repeat === "off" ? "all" : s.repeat === "all" ? "one" : "off",
-    })),
-
-  addToQueue: (track) =>
-    set((s) => ({
-      queue: [...s.queue, track],
-    })),
-
+  cycleRepeat: () => set((s) => ({ repeat: s.repeat === "off" ? "all" : s.repeat === "all" ? "one" : "off" })),
+  addToQueue: (track) => set((s) => ({ queue: [...s.queue, track] })),
   clearQueue: () => set({ queue: [], queueIndex: -1 }),
 }));
