@@ -1,90 +1,6 @@
 import { NextResponse } from "next/server";
 
-// Quick lookup: find a single YouTube videoId for a song title + artist
-// Used to upgrade iTunes tracks to full-track playback on-demand
-
-// ─── Method 1: YouTube scrape (most reliable) ─────────────────────
-function extractVideoIds(html: string): string[] {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  const re = /"videoId":"([a-zA-Z0-9_-]{11})"/g;
-  let m;
-  while ((m = re.exec(html)) !== null && ids.length < 3) {
-    if (!seen.has(m[1])) {
-      seen.add(m[1]);
-      ids.push(m[1]);
-    }
-  }
-  return ids;
-}
-
-async function lookupViaYouTubeScrape(query: string): Promise<{ videoId: string; duration: number | null } | null> {
-  try {
-    const res = await fetch(
-      `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
-      {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-        signal: AbortSignal.timeout(12000),
-      }
-    );
-    if (!res.ok) return null;
-
-    const html = await res.text();
-    const videoIds = extractVideoIds(html);
-    if (videoIds.length > 0) {
-      return { videoId: videoIds[0], duration: null };
-    }
-  } catch {
-    // fall through to Invidious
-  }
-  return null;
-}
-
-// ─── Method 2: Invidious fallback ─────────────────────────────────
-const INVIDIOUS_INSTANCES = [
-  "https://inv.tux.pizza",
-  "https://invidious.fdn.fr",
-  "https://vid.puffyan.us",
-  "https://invidious.nerdvpn.de",
-  "https://yt.artemislena.eu",
-];
-
-interface InvidiousVideo {
-  videoId: string;
-  lengthSeconds: number;
-}
-
-async function lookupViaInvidious(query: string): Promise<{ videoId: string; duration: number | null } | null> {
-  for (const instance of INVIDIOUS_INSTANCES) {
-    try {
-      const url = `${instance}/api/v1/search?q=${encodeURIComponent(query)}&type=video&sort_by=relevance&page=1`;
-      const res = await fetch(url, {
-        signal: AbortSignal.timeout(5000),
-        headers: { "User-Agent": "FreeWave/1.0", Accept: "application/json" },
-      });
-      if (!res.ok) continue;
-
-      const data = await res.json();
-      const videos: InvidiousVideo[] = (data || []).filter(
-        (item: Record<string, unknown>) => item.type === "video" && item.videoId
-      );
-
-      if (videos.length > 0) {
-        return {
-          videoId: videos[0].videoId,
-          duration: videos[0].lengthSeconds > 0 ? videos[0].lengthSeconds : null,
-        };
-      }
-    } catch {
-      // try next
-    }
-  }
-  return null;
-}
+// Quick lookup: find a single YouTube videoId using innertube API
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -97,11 +13,75 @@ export async function GET(request: Request) {
 
   const query = `${artist} ${title} official audio`;
 
-  // Try YouTube scrape first, then Invidious
-  const result = (await lookupViaYouTubeScrape(query)) || (await lookupViaInvidious(query));
+  try {
+    const res = await fetch("https://www.youtube.com/youtubei/v1/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: "WEB",
+            clientVersion: "2.20250101.00.00",
+          },
+        },
+        query: query,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
 
-  if (result) {
-    return NextResponse.json(result);
+    if (!res.ok) {
+      return NextResponse.json({ videoId: null, duration: null });
+    }
+
+    const data = await res.json();
+
+    // Find first videoId recursively
+    function findFirstVideoId(obj: unknown): { videoId: string; duration: number | null } | null {
+      if (!obj || typeof obj !== "object") return null;
+      if (Array.isArray(obj)) {
+        for (const item of obj) {
+          const result = findFirstVideoId(item);
+          if (result) return result;
+        }
+        return null;
+      }
+      const record = obj as Record<string, unknown>;
+      if (
+        typeof record.videoId === "string" &&
+        record.videoId.length === 11
+      ) {
+        // Try to get duration
+        let duration: number | null = null;
+        if (record.lengthText && typeof record.lengthText === "object") {
+          const lt = record.lengthText as Record<string, unknown>;
+          if (typeof lt.simpleText === "string") {
+            const parts = lt.simpleText.split(":").map(Number);
+            if (parts.length === 2 && parts.every((n) => !isNaN(n))) {
+              duration = parts[0] * 60 + parts[1];
+            } else if (parts.length === 3 && parts.every((n) => !isNaN(n))) {
+              duration = parts[0] * 3600 + parts[1] * 60 + parts[2];
+            }
+          }
+        }
+        return { videoId: record.videoId, duration };
+      }
+      for (const value of Object.values(record)) {
+        const result = findFirstVideoId(value);
+        if (result) return result;
+      }
+      return null;
+    }
+
+    const result = findFirstVideoId(data);
+    if (result) {
+      return NextResponse.json(result);
+    }
+  } catch (e) {
+    console.error("[FreeWave] YouTube lookup failed:", e);
   }
 
   return NextResponse.json({ videoId: null, duration: null });
