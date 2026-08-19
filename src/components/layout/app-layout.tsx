@@ -13,9 +13,7 @@ interface AppLayoutProps {
 
 export function AppLayout({ children }: AppLayoutProps) {
   useEffect(() => {
-    // Set your Cloudflare Worker proxy URL here once deployed
-    // Example: setProxyUrl("https://freewave-proxy.your-name.workers.dev");
-    setProxyUrl("PASTE_YOUR_WORKER_URL_HERE");
+    setProxyUrl("https://proxy-worker.telesmartgh.workers.dev");
   }, []);
   return (
     <div className="h-[100dvh] flex flex-col bg-[#121212] text-white overflow-hidden">
