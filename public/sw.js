@@ -1,9 +1,24 @@
 // FreeWave Service Worker — enables PWA install + background audio
-const CACHE_NAME = 'freewave-v2';
+const CACHE_NAME = 'freewave-v3';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
   '/favicon.svg',
+];
+
+// Domains that should never be cached or intercepted
+const PASS_THROUGH_HOSTS = [
+  'workers.dev',
+  'youtube.com',
+  'ytimg.com',
+  'itunes.apple.com',
+  'mzstatic.com',
+  'googlevideo.com',
+  'ggpht.com',
+  'pipedapi',
+  'piped.video',
+  'projectsegfau.lt',
+  'adminforge.de',
 ];
 
 // Install: cache app shell
@@ -26,12 +41,25 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch: network-first for API, cache-first for assets
+// Fetch: network-first for API, cache-first for assets, pass-through for media
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Never cache API calls or proxy requests
-  if (url.pathname.startsWith('/api/') || url.hostname.includes('workers.dev') || url.hostname.includes('youtube.com') || url.hostname.includes('ytimg.com') || url.hostname.includes('itunes.apple.com') || url.hostname.includes('googlevideo.com')) {
+  // Never cache or intercept API calls
+  if (url.pathname.startsWith('/api/')) {
+    return;
+  }
+
+  // Never cache or intercept audio/media streams from external hosts
+  for (const host of PASS_THROUGH_HOSTS) {
+    if (url.hostname.includes(host)) {
+      return;
+    }
+  }
+
+  // Never cache audio/video content types
+  const accept = event.request.headers.get('Accept') || '';
+  if (accept.includes('audio/') || accept.includes('video/') || url.pathname.endsWith('.m4a') || url.pathname.endsWith('.webm') || url.pathname.endsWith('.mp4') || url.pathname.endsWith('.opus')) {
     return;
   }
 
@@ -48,7 +76,6 @@ self.addEventListener('fetch', (event) => {
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
       return fetch(event.request).then((response) => {
-        // Cache successful GETs for static assets
         if (response.ok && event.request.method === 'GET') {
           const clone = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));

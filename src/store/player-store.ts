@@ -43,9 +43,7 @@ export interface PlayerState {
   addToQueue: (track: Track) => void;
   clearQueue: () => void;
   // Internal: set by PlaybackEngine for direct access
-  _seekToYt: (seconds: number) => void;
   _seekToAudio: (seconds: number) => void;
-  _stopYtPolling: () => void;
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -60,9 +58,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   repeat: "off",
   isUpgrading: false,
   seekPosition: null,
-  _seekToYt: () => {},
   _seekToAudio: () => {},
-  _stopYtPolling: () => {},
 
   playTrack: (track, queue) => {
     const newQueue = queue || [track];
