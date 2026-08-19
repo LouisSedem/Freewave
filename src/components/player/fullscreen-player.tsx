@@ -54,6 +54,13 @@ export function FullscreenPlayer({
   const isDragging = useRef(false);
   const [isFavorite, setIsFavorite] = useState(false);
   const [showQueue, setShowQueue] = useState(false);
+
+  // Artwork swipe state
+  const swipeStartX = useRef(0);
+  const swipeStartY = useRef(0);
+  const swipeDeltaX = useRef(0);
+  const [artworkOffset, setArtworkOffset] = useState(0);
+  const [artworkOpacity, setArtworkOpacity] = useState(1);
   const queue = usePlayerStore((s) => s.queue);
   const queueIndex = usePlayerStore((s) => s.queueIndex);
   const playTrack = usePlayerStore((s) => s.playTrack);
@@ -148,6 +155,34 @@ export function FullscreenPlayer({
 
   const progressPercent = duration > 0 ? (progress / duration) * 100 : 0;
 
+  // Artwork swipe handlers
+  const SWIPE_THRESHOLD = 80;
+  const onArtworkTouchStart = useCallback((e: React.TouchEvent) => {
+    swipeStartX.current = e.touches[0].clientX;
+    swipeStartY.current = e.touches[0].clientY;
+    swipeDeltaX.current = 0;
+  }, []);
+  const onArtworkTouchMove = useCallback((e: React.TouchEvent) => {
+    const dx = e.touches[0].clientX - swipeStartX.current;
+    const dy = e.touches[0].clientY - swipeStartY.current;
+    // Only track horizontal swipes (not diagonal)
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dy) < 30) {
+      swipeDeltaX.current = dx;
+      setArtworkOffset(dx * 0.3);
+      setArtworkOpacity(Math.max(0.3, 1 - Math.abs(dx) / 400));
+    }
+  }, []);
+  const onArtworkTouchEnd = useCallback(() => {
+    setArtworkOffset(0);
+    setArtworkOpacity(1);
+    if (swipeDeltaX.current < -SWIPE_THRESHOLD) {
+      next(); // swipe left → next
+    } else if (swipeDeltaX.current > SWIPE_THRESHOLD) {
+      previous(); // swipe right → previous
+    }
+    swipeDeltaX.current = 0;
+  }, [next, previous]);
+
   if (!currentTrack) return null;
 
   return (
@@ -191,14 +226,26 @@ export function FullscreenPlayer({
             </div>
           </div>
 
-          {/* Artwork */}
-          <div className="flex-shrink-0 flex items-center justify-center px-8 mb-6">
-            <div className="w-full aspect-square max-w-[340px] rounded-2xl overflow-hidden shadow-2xl shadow-black/50">
+          {/* Artwork — swipeable */}
+          <div
+            className="flex-shrink-0 flex items-center justify-center px-8 mb-6"
+            onTouchStart={onArtworkTouchStart}
+            onTouchMove={onArtworkTouchMove}
+            onTouchEnd={onArtworkTouchEnd}
+          >
+            <div
+              className="w-full aspect-square max-w-[340px] rounded-2xl overflow-hidden shadow-2xl shadow-black/50 transition-transform duration-200 ease-out select-none"
+              style={{
+                transform: `translateX(${artworkOffset}px) scale(${1 - Math.abs(artworkOffset) / 2000})`,
+                opacity: artworkOpacity,
+              }}
+            >
               {currentTrack.artwork ? (
                 <img
                   src={currentTrack.artwork}
                   alt={currentTrack.title}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-cover pointer-events-none"
+                  draggable={false}
                 />
               ) : (
                 <div className="w-full h-full bg-[#282828] flex items-center justify-center">
