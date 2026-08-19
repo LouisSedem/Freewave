@@ -24,3 +24,25 @@ Stage Summary:
 - Root cause: YouTube blocks ALL datacenter IPs (Vercel, AWS, GCP) + all public CORS proxies block production domains
 - Solution: Self-hosted Cloudflare Worker as CORS proxy (2 min setup, free, permanent)
 - Code is ready, just needs NEXT_PUBLIC_YT_PROXY_URL env var on Vercel
+---
+Task ID: 1
+Agent: main
+Task: Fix full-track YouTube playback on mobile
+
+Work Log:
+- Discovered Vercel production branch was master not main (pushes went to preview only)
+- Pushed to master, verified proxy URL in deployed chunks
+- Tested search via browser agent: proxy-worker.telesmartgh.workers.dev returns 200, search results show Full Track
+- Found critical bug: PlayerBar (containing ALL YouTube player logic) wrapped in hidden md:block — never rendered on mobile
+- Created PlaybackEngine component that is ALWAYS mounted (handles YouTube IFrame API + iTunes Audio)
+- Stripped PlayerBar down to UI-only (no playback logic)
+- Updated MobileNav to use seekTo for progress bar
+- Added seekPosition/clearSeek/seekTo to player store
+- Verified #yt-player div exists on both desktop and mobile viewports
+
+Stage Summary:
+- Proxy Worker: working (200, returns ytInitialData)
+- Search: working (Full Track results with videoIds)
+- PlaybackEngine: deployed, always-mounted, #yt-player div exists on all viewports
+- Cannot test actual YouTube iframe in headless browser (known limitation)
+
