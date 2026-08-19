@@ -1,14 +1,21 @@
 // FreeWave API utilities
 
-// CORS proxy: your own Cloudflare Worker (see /worker/ folder for deploy instructions)
-// Falls back to corsproxy.io for local development
+// Cloudflare Worker proxy — fetches YouTube HTML from Cloudflare edge (bypasses Vercel IP blocks)
+// This URL will be updated once the worker is deployed.
+// The worker only allows youtube.com requests for security.
+let WORKER_URL = ""; // Will be set when you provide your worker URL
+
 function getCorsProxyUrl(targetUrl: string): string {
-  // User's own proxy takes priority (set in .env as NEXT_PUBLIC_YT_PROXY_URL)
-  if (process.env.NEXT_PUBLIC_YT_PROXY_URL) {
-    return `${process.env.NEXT_PUBLIC_YT_PROXY_URL}?url=${encodeURIComponent(targetUrl)}`;
+  if (WORKER_URL) {
+    return `${WORKER_URL}?url=${encodeURIComponent(targetUrl)}`;
   }
-  // Fallback for local dev only (blocked on production domains)
+  // Fallback for local dev only (unreliable on production)
   return `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+}
+
+// Call this once at app init to set the worker URL
+export function setProxyUrl(url: string) {
+  WORKER_URL = url;
 }
 
 export interface ITunesSearchResult {
