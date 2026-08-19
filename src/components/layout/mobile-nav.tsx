@@ -28,6 +28,7 @@ export function MobileNav() {
   const next = usePlayerStore((s) => s.next);
   const previous = usePlayerStore((s) => s.previous);
   const setProgress = usePlayerStore((s) => s.setProgress);
+  const seekTo = usePlayerStore((s) => s.seekTo);
 
   const handleProgressClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -36,8 +37,9 @@ export function MobileNav() {
       const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       const newProgress = percent * duration;
       setProgress(newProgress);
+      seekTo(newProgress);
     },
-    [duration, setProgress]
+    [duration, setProgress, seekTo]
   );
 
   const progressPercent = duration > 0 ? (progress / duration) * 100 : 0;

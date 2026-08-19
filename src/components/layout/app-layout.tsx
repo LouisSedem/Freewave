@@ -5,6 +5,7 @@ import { useView } from "@/store/view-context";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { PlayerBar } from "@/components/player/player-bar";
+import { PlaybackEngine } from "@/components/player/playback-engine";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -13,6 +14,9 @@ interface AppLayoutProps {
 export function AppLayout({ children }: AppLayoutProps) {
   return (
     <div className="h-[100dvh] flex flex-col bg-[#121212] text-white overflow-hidden">
+      {/* Always-mounted playback engine (handles YouTube + iTunes audio) */}
+      <PlaybackEngine />
+
       {/* Main content area */}
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
@@ -21,12 +25,12 @@ export function AppLayout({ children }: AppLayoutProps) {
         </main>
       </div>
 
-      {/* Desktop player bar */}
+      {/* Desktop player bar (UI only) */}
       <div className="hidden md:block">
         <PlayerBar />
       </div>
 
-      {/* Mobile bottom navigation */}
+      {/* Mobile bottom navigation (UI only) */}
       <MobileNav />
     </div>
   );

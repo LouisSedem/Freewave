@@ -68,7 +68,7 @@ interface ParsedYTVideo {
 function parseYTInitialData(html: string, max: number): ParsedYTVideo[] {
   try {
     // Extract ytInitialData JSON blob from YouTube HTML
-    const match = html.match(/var ytInitialData = ({.+?});\s*<\/script>/s);
+    const match = html.match(/var ytInitialData = ([\s\S]+?);\s*<\/script>/);
     if (!match) return [];
 
     const data = JSON.parse(match[1]);
@@ -163,7 +163,7 @@ async function searchYouTubeViaProxy(query: string, maxResults = 10): Promise<Tr
         source: "youtube" as const,
         videoId: v.videoId,
         duration: v.duration,
-        previewUrl: null,
+        previewUrl: undefined,
       }));
   } catch (e) {
     console.error("[FreeWave] YouTube proxy error:", e);

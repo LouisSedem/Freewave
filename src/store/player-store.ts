@@ -25,6 +25,7 @@ export interface PlayerState {
   shuffle: boolean;
   repeat: "off" | "all" | "one";
   isUpgrading: boolean;
+  seekPosition: number | null;
   playTrack: (track: Track, queue?: Track[]) => void;
   upgradeTrackToYouTube: (videoId: string, duration: number | null) => void;
   pause: () => void;
@@ -35,10 +36,16 @@ export interface PlayerState {
   setVolume: (volume: number) => void;
   setProgress: (progress: number) => void;
   setDuration: (duration: number) => void;
+  seekTo: (seconds: number) => void;
+  clearSeek: () => void;
   toggleShuffle: () => void;
   cycleRepeat: () => void;
   addToQueue: (track: Track) => void;
   clearQueue: () => void;
+  // Internal: set by PlaybackEngine for direct access
+  _seekToYt: (seconds: number) => void;
+  _seekToAudio: (seconds: number) => void;
+  _stopYtPolling: () => void;
 }
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -52,6 +59,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   shuffle: false,
   repeat: "off",
   isUpgrading: false,
+  seekPosition: null,
+  _seekToYt: () => {},
+  _seekToAudio: () => {},
+  _stopYtPolling: () => {},
 
   playTrack: (track, queue) => {
     const newQueue = queue || [track];
@@ -145,6 +156,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setVolume: (volume) => set({ volume }),
   setProgress: (progress) => set({ progress }),
   setDuration: (duration) => set({ duration }),
+  seekTo: (seconds) => set({ seekPosition: seconds }),
+  clearSeek: () => set({ seekPosition: null }),
   toggleShuffle: () => set((s) => ({ shuffle: !s.shuffle })),
   cycleRepeat: () => set((s) => ({ repeat: s.repeat === "off" ? "all" : s.repeat === "all" ? "one" : "off" })),
   addToQueue: (track) => set((s) => ({ queue: [...s.queue, track] })),
