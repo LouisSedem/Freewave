@@ -4,7 +4,6 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import {
   Search,
   Play,
-  Pause,
   Heart,
   Plus,
   Music2,
@@ -12,7 +11,6 @@ import {
   X,
   ChevronRight,
   ChevronLeft,
-  MoreVertical,
   ListPlus,
   Trash2,
 } from "lucide-react";
