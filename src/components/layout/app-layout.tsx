@@ -1,20 +1,16 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React from "react";
 import { useView } from "@/store/view-context";
 import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { PlayerBar } from "@/components/player/player-bar";
-import { setProxyUrl } from "@/lib/api";
 
 interface AppLayoutProps {
   children: React.ReactNode;
 }
 
 export function AppLayout({ children }: AppLayoutProps) {
-  useEffect(() => {
-    setProxyUrl("https://proxy-worker.telesmartgh.workers.dev");
-  }, []);
   return (
     <div className="h-[100dvh] flex flex-col bg-[#121212] text-white overflow-hidden">
       {/* Main content area */}
