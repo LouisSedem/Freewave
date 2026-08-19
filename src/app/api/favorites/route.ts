@@ -1,9 +1,17 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
-// GET /api/favorites - Get all favorites
-export async function GET() {
+// GET /api/favorites?trackId=xxx - Check if track is favorited, or get all favorites
+export async function GET(request: Request) {
   try {
+    const { searchParams } = new URL(request.url);
+    const trackId = searchParams.get("trackId");
+
+    if (trackId) {
+      const favorite = await db.favorite.findUnique({ where: { trackId } });
+      return NextResponse.json({ favorite: favorite || null });
+    }
+
     const favorites = await db.favorite.findMany({
       orderBy: { createdAt: "desc" },
     });
