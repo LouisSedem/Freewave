@@ -3,90 +3,52 @@
 import React, { useCallback, useEffect, useRef } from "react";
 import { usePlayerStore, type Track } from "@/store/player-store";
 
-// ─── Piped API instances (fallback chain) ──────────────────────────────
-const PIPED_INSTANCES = [
-  "https://pipedapi.kavin.rocks",
-  "https://pipedapi.adminforge.de",
-  "https://pipedapi.in.projectsegfau.lt",
-];
-
-interface PipedStream {
-  url: string;
-  mimeType?: string;
-  bitrate?: number;
-  quality?: string;
-  contentLength?: number;
-}
-
-interface PipedStreamsResponse {
-  title?: string;
-  uploader?: string;
-  uploaderUrl?: string;
-  thumbnailUrl?: string;
-  duration?: number;
-  audioStreams?: PipedStream[];
-  videoStreams?: PipedStream[];
-  errorMessage?: string;
-}
-
-/**
- * Fetches a direct audio URL for a YouTube video via Piped API.
- * Tries multiple instances with timeout. Returns null if all fail.
- */
-async function fetchAudioUrlFromPiped(
-  videoId: string,
-  signal?: AbortSignal
-): Promise<string | null> {
-  for (const instance of PIPED_INSTANCES) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-      // Link the external signal if provided
-      const combinedSignal = signal
-        ? AbortSignal.any([signal, controller.signal])
-        : controller.signal;
-
-      const res = await fetch(
-        `${instance}/streams/${videoId}`,
-        { signal: combinedSignal }
-      );
-      clearTimeout(timeoutId);
-
-      if (!res.ok) continue;
-
-      const data: PipedStreamsResponse = await res.json();
-      if (data.errorMessage || !data.audioStreams?.length) continue;
-
-      // Sort by bitrate descending, prefer mp4/m4a codecs
-      const sorted = [...data.audioStreams].sort((a, b) => {
-        const aMp4 = a.mimeType?.includes("audio/mp4") ? 1 : 0;
-        const bMp4 = b.mimeType?.includes("audio/mp4") ? 1 : 0;
-        if (aMp4 !== bMp4) return bMp4 - aMp4;
-        return (b.bitrate || 0) - (a.bitrate || 0);
-      });
-
-      // Prefer m4a/mp4 audio (widest browser support), fallback to webm/opus
-      const best = sorted[0];
-      if (best?.url) {
-        console.log(
-          `[FreeWave] Got audio URL from ${instance}, format: ${best.mimeType}, bitrate: ${best.bitrate}`
-        );
-        return best.url;
-      }
-    } catch (e) {
-      console.warn(`[FreeWave] Piped instance ${instance} failed:`, e);
-    }
+// YouTube IFrame API types
+declare global {
+  interface Window {
+    YT: typeof YT;
+    onYouTubeIframeAPIReady: () => void;
   }
-  return null;
+  var YT: {
+    Player: new (
+      elementId: string,
+      options: {
+        height?: string;
+        width?: string;
+        videoId?: string;
+        playerVars?: Record<string, unknown>;
+        events?: {
+          onReady?: (event: { target: YTPlayerInstance }) => void;
+          onStateChange?: (event: { data: number }) => void;
+        };
+      }
+    ) => YTPlayerInstance;
+    PlayerState: {
+      PLAYING: number;
+      PAUSED: number;
+      ENDED: number;
+      BUFFERING: number;
+    };
+    ready: (callback: () => void) => void;
+  };
+}
+
+interface YTPlayerInstance {
+  loadVideoById: (videoId: string) => void;
+  playVideo: () => void;
+  pauseVideo: () => void;
+  seekTo: (seconds: number, allowSeekAhead: boolean) => void;
+  setVolume: (volume: number) => void;
+  getCurrentTime: () => number;
+  getDuration: () => number;
+  destroy: () => void;
+  getPlayerState: () => number;
 }
 
 /**
- * PlaybackEngine — handles ALL audio via native <audio> element.
- * YouTube audio is fetched through Piped API (direct URLs, no IFrame).
- * This enables background playback on mobile when installed as PWA.
- *
- * Renders no visible UI. All state is read from the player store.
+ * Always-mounted component that handles ALL audio playback.
+ * Renders only the hidden #yt-player div — no visible UI.
+ * Both PlayerBar (desktop) and MobileNav (mobile) read state from the store.
  */
 export function PlaybackEngine() {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
@@ -98,203 +60,232 @@ export function PlaybackEngine() {
   const seekPosition = usePlayerStore((s) => s.seekPosition);
   const clearSeek = usePlayerStore((s) => s.clearSeek);
 
+  // Audio element for iTunes previews
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const currentTrackIdRef = useRef<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const isFetchingRef = useRef(false);
-  const retryCountRef = useRef(0);
 
-  // Initialize the audio element once
+  // YouTube player refs
+  const ytPlayerRef = useRef<YTPlayerInstance | null>(null);
+  const ytReadyRef = useRef(false);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const currentVideoIdRef = useRef<string | null>(null);
+  const apiLoadedRef = useRef(false);
+
+  // Start progress polling for YouTube
+  const startYTProgressPolling = useCallback(() => {
+    if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+    progressIntervalRef.current = setInterval(() => {
+      const player = ytPlayerRef.current;
+      if (player) {
+        try {
+          const currentTime = player.getCurrentTime();
+          const dur = player.getDuration();
+          if (currentTime > 0) setProgress(currentTime);
+          if (dur > 0) setDuration(dur);
+        } catch {
+          // Player might not be ready
+        }
+      }
+    }, 250);
+  }, [setProgress, setDuration]);
+
+  const stopYTProgressPolling = useCallback(() => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+  }, []);
+
+  // Expose seekTo and stopPolling for external components (via store)
   useEffect(() => {
-    if (!audioRef.current) {
-      const audio = new Audio();
-      audio.preload = "auto";
+    usePlayerStore.setState({ _seekToYt: (seconds: number) => {
+      const player = ytPlayerRef.current;
+      if (player && ytReadyRef.current) {
+        try { player.seekTo(seconds, true); } catch {}
+      }
+    }, _seekToAudio: (seconds: number) => {
+      if (audioRef.current) audioRef.current.currentTime = seconds;
+    }, _stopYtPolling: stopYTProgressPolling });
+  }, [stopYTProgressPolling]);
 
-      // Event listeners
-      audio.addEventListener("timeupdate", () => {
-        setProgress(audio.currentTime);
-      });
-      audio.addEventListener("loadedmetadata", () => {
-        setDuration(audio.duration);
-      });
-      audio.addEventListener("durationchange", () => {
-        if (audio.duration && isFinite(audio.duration)) {
-          setDuration(audio.duration);
-        }
-      });
-      audio.addEventListener("ended", () => {
-        console.log("[FreeWave] Track ended, playing next");
-        retryCountRef.current = 0;
-        next();
-      });
-      audio.addEventListener("error", (e) => {
-        const mediaErr = audio.error;
-        console.warn(
-          "[FreeWave] Audio error:",
-          mediaErr?.message,
-          "code:",
-          mediaErr?.code
-        );
+  // Load YouTube IFrame API once
+  useEffect(() => {
+    if (apiLoadedRef.current) return;
+    apiLoadedRef.current = true;
 
-        // If we haven't retried much and the track is YouTube-based,
-        // try to refetch the audio URL (might have expired)
-        const track = usePlayerStore.getState().currentTrack;
-        if (
-          track?.source === "youtube" &&
-          track.videoId &&
-          retryCountRef.current < 2
-        ) {
-          retryCountRef.current++;
-          console.log(
-            `[FreeWave] Retrying audio fetch (attempt ${retryCountRef.current})`
-          );
-          loadAudioForTrack(track);
-        }
-      });
-      audio.addEventListener("waiting", () => {
-        // Buffering — could show a spinner via store if needed
-      });
-      audio.addEventListener("playing", () => {
-        retryCountRef.current = 0;
-      });
+    const createPlayer = () => {
+      if (ytPlayerRef.current) return;
+      try {
+        ytPlayerRef.current = new window.YT.Player("yt-player", {
+          height: "1",
+          width: "1",
+          playerVars: {
+            autoplay: 0,
+            controls: 0,
+            disablekb: 1,
+            fs: 0,
+            modestbranding: 1,
+            rel: 0,
+            showinfo: 0,
+            playsinline: 1,
+            origin: window.location.origin,
+          },
+          events: {
+            onReady: () => {
+              ytReadyRef.current = true;
+            },
+            onStateChange: (event) => {
+              if (event.data === window.YT.PlayerState.ENDED) {
+                stopYTProgressPolling();
+                setTimeout(() => next(), 100);
+              } else if (event.data === window.YT.PlayerState.PLAYING) {
+                startYTProgressPolling();
+              } else if (event.data === window.YT.PlayerState.PAUSED) {
+                stopYTProgressPolling();
+              }
+            },
+          },
+        });
+      } catch (e) {
+        console.error("[FreeWave] Failed to create YT player:", e);
+      }
+    };
 
-      audioRef.current = audio;
+    if (window.YT && window.YT.Player) {
+      createPlayer();
+    } else {
+      window.onYouTubeIframeAPIReady = createPlayer;
+      const tag = document.createElement("script");
+      tag.src = "https://www.youtube.com/iframe_api";
+      document.head.appendChild(tag);
     }
 
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
-        audioRef.current = null;
+      stopYTProgressPolling();
+    };
+  }, [next, startYTProgressPolling, stopYTProgressPolling]);
+
+  // Reset YouTube video ref when track changes entirely
+  useEffect(() => {
+    currentVideoIdRef.current = null;
+  }, [currentTrack?.id]);
+
+  // Handle track changes - YouTube
+  useEffect(() => {
+    const videoId = currentTrack?.videoId;
+    if (!videoId || currentTrack?.source !== "youtube") return;
+    if (currentVideoIdRef.current === videoId) return;
+    currentVideoIdRef.current = videoId;
+
+    // Stop any iTunes audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+    }
+    stopYTProgressPolling();
+
+    let retries = 0;
+    const tryLoadVideo = () => {
+      const player = ytPlayerRef.current;
+      if (player && ytReadyRef.current) {
+        try {
+          player.loadVideoById(videoId);
+          setDuration(0);
+          setProgress(0);
+        } catch (e) {
+          console.error("[FreeWave] Failed to load video:", e);
+        }
+      } else if (retries < 50) {
+        retries++;
+        setTimeout(tryLoadVideo, 200);
       }
     };
-  }, [setProgress, setDuration, next]);
+    tryLoadVideo();
+  }, [currentTrack?.videoId, currentTrack?.source, setDuration, setProgress, stopYTProgressPolling]);
 
-  // Load audio URL for a track (YouTube via Piped, iTunes direct)
-  const loadAudioForTrack = useCallback(
-    async (track: Track) => {
-      const audio = audioRef.current;
-      if (!audio) return;
+  // Sync play/pause with YouTube
+  useEffect(() => {
+    const player = ytPlayerRef.current;
+    if (!player || !ytReadyRef.current) return;
+    if (currentTrack?.source !== "youtube") return;
+    try {
+      if (isPlaying) player.playVideo();
+      else player.pauseVideo();
+    } catch {}
+  }, [isPlaying, currentTrack?.source]);
 
-      // Abort any pending fetch
-      abortControllerRef.current?.abort();
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
+  // Sync volume with YouTube
+  useEffect(() => {
+    const player = ytPlayerRef.current;
+    if (!player || !ytReadyRef.current) return;
+    try { player.setVolume(Math.round(volume * 100)); } catch {}
+  }, [volume]);
 
-      if (track.source === "itunes" && track.previewUrl) {
-        // iTunes preview — direct URL, just play it
-        audio.src = track.previewUrl;
-        if (usePlayerStore.getState().isPlaying) {
-          audio.play().catch(() => {});
-        }
-      } else if (track.source === "youtube" && track.videoId) {
-        // YouTube — fetch direct audio URL via Piped API
-        isFetchingRef.current = true;
-        const audioUrl = await fetchAudioUrlFromPiped(
-          track.videoId,
-          controller.signal
-        );
-        isFetchingRef.current = false;
+  // Handle track changes - iTunes
+  useEffect(() => {
+    if (!currentTrack) return;
+    if (currentTrack.source === "youtube") return;
 
-        // Check if track changed while we were fetching
-        const current = usePlayerStore.getState().currentTrack;
-        if (!current || current.id !== track.id) return;
-        if (controller.signal.aborted) return;
+    if (currentTrack.source === "itunes" && currentTrack.previewUrl) {
+      stopYTProgressPolling();
 
-        if (audioUrl) {
-          audio.src = audioUrl;
-          if (usePlayerStore.getState().isPlaying) {
-            audio.play().catch(() => {});
-          }
-        } else {
-          console.error(
-            "[FreeWave] Could not get audio URL from any Piped instance for:",
-            track.videoId
-          );
-          // Could show an error toast here
-        }
+      if (!audioRef.current) {
+        audioRef.current = new Audio();
+        audioRef.current.addEventListener("timeupdate", () => {
+          if (audioRef.current) setProgress(audioRef.current.currentTime);
+        });
+        audioRef.current.addEventListener("loadedmetadata", () => {
+          if (audioRef.current) setDuration(audioRef.current.duration);
+        });
+        audioRef.current.addEventListener("ended", () => {
+          next();
+        });
       }
-    },
-    []
-  );
-
-  // Expose seekTo for external components via store
-  useEffect(() => {
-    usePlayerStore.setState({
-      _seekToAudio: (seconds: number) => {
-        if (audioRef.current) {
-          audioRef.current.currentTime = seconds;
-        }
-      },
-      _seekToYt: () => {}, // no-op, no more YouTube IFrame
-      _stopYtPolling: () => {}, // no-op
-    });
-  }, []);
-
-  // Handle track changes
-  useEffect(() => {
-    if (!currentTrack) {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
-      }
-      currentTrackIdRef.current = null;
-      return;
+      audioRef.current.src = currentTrack.previewUrl;
+      if (isPlaying) audioRef.current.play().catch(() => {});
     }
+  }, [currentTrack?.id, currentTrack?.source, currentTrack?.previewUrl, isPlaying, next, setProgress, setDuration, stopYTProgressPolling]);
 
-    if (currentTrackIdRef.current === currentTrack.id) return;
-    currentTrackIdRef.current = currentTrack.id;
-    retryCountRef.current = 0;
-
-    // Reset progress/duration for new track
-    setProgress(0);
-    setDuration(0);
-
-    // If track has a known duration (from search results), set it immediately
-    if (currentTrack.duration) {
-      setDuration(currentTrack.duration);
-    }
-
-    loadAudioForTrack(currentTrack);
-  }, [currentTrack?.id, currentTrack, loadAudioForTrack, setProgress, setDuration]);
-
-  // Sync play/pause
+  // Sync play/pause with iTunes audio
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio || !currentTrack) return;
-
-    if (isPlaying) {
-      audio.play().catch((e) => {
-        console.warn("[FreeWave] play() blocked:", e.message);
-      });
+    if (!audioRef.current) return;
+    if (isPlaying && currentTrack?.source === "itunes") {
+      audioRef.current.play().catch(() => {});
     } else {
-      audio.pause();
+      audioRef.current.pause();
     }
-  }, [isPlaying, currentTrack]);
+  }, [isPlaying, currentTrack?.source]);
 
-  // Sync volume
+  // Sync volume with iTunes audio
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = volume;
-    }
+    if (!audioRef.current) return;
+    audioRef.current.volume = volume;
   }, [volume]);
 
   // Handle seek requests from UI
   useEffect(() => {
     if (seekPosition === null) return;
-    if (audioRef.current) {
+    if (currentTrack?.source === "youtube" && ytPlayerRef.current && ytReadyRef.current) {
+      try { ytPlayerRef.current.seekTo(seekPosition, true); } catch {}
+    } else if (currentTrack?.source === "itunes" && audioRef.current) {
       audioRef.current.currentTime = seekPosition;
     }
     clearSeek();
-  }, [seekPosition, clearSeek]);
+  }, [seekPosition, currentTrack?.source, clearSeek]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      abortControllerRef.current?.abort();
-    };
-  }, []);
-
-  // Render nothing visible — audio element is created programmatically
-  return null;
+  // Render only the hidden YouTube player div
+  return (
+    <div
+      id="yt-player"
+      style={{
+        position: "fixed",
+        top: "-9999px",
+        left: "-9999px",
+        width: "1px",
+        height: "1px",
+        overflow: "hidden",
+        pointerEvents: "none",
+        opacity: 0,
+      }}
+    />
+  );
 }

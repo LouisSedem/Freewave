@@ -4,9 +4,9 @@ import { useEffect, useRef, useCallback } from "react";
 import { usePlayerStore, type Track } from "@/store/player-store";
 
 /**
- * Sets up Media Session API for lock screen / notification controls.
- * Works natively with the <audio> element in PlaybackEngine.
- * No YouTube IFrame workarounds needed anymore.
+ * Sets up Media Session API for lock screen / notification controls
+ * and helps keep audio alive when the PWA is backgrounded.
+ * Mounted inside AppLayout (client component) so it only runs in the browser.
  */
 export function MediaSessionController() {
   const currentTrack = usePlayerStore((s) => s.currentTrack);
@@ -27,8 +27,7 @@ export function MediaSessionController() {
         album: track.album || "FreeWave",
         artwork: track.artwork
           ? [
-              { src: track.artwork, sizes: "512x512", type: "image/jpeg" },
-              { src: track.artwork, sizes: "192x192", type: "image/jpeg" },
+              { src: track.artwork, sizes: "300x300", type: "image/jpeg" },
               { src: track.artwork, sizes: "96x96", type: "image/jpeg" },
             ]
           : [],
@@ -59,31 +58,29 @@ export function MediaSessionController() {
     if (!navigator.mediaSession) return;
     const ms = navigator.mediaSession;
 
-    try {
-      ms.setActionHandler("play", () => usePlayerStore.getState().resume());
-      ms.setActionHandler("pause", () => usePlayerStore.getState().pause());
-      ms.setActionHandler("toggleplay", () => usePlayerStore.getState().togglePlay());
-      ms.setActionHandler("nexttrack", () => usePlayerStore.getState().next());
-      ms.setActionHandler("previoustrack", () => usePlayerStore.getState().previous());
-      ms.setActionHandler("seekto", (details: MediaSessionActionDetails) => {
-        if (details.seekTime !== undefined) {
-          usePlayerStore.getState().seekTo(details.seekTime);
-        }
-      });
-      ms.setActionHandler("seekbackward", (details) => {
-        const offset = details.seekOffset || 10;
-        const current = usePlayerStore.getState().progress;
-        usePlayerStore.getState().seekTo(Math.max(0, current - offset));
-      });
-      ms.setActionHandler("seekforward", (details) => {
-        const offset = details.seekOffset || 10;
-        const current = usePlayerStore.getState().progress;
-        const dur = usePlayerStore.getState().duration;
-        usePlayerStore.getState().seekTo(Math.min(dur, current + offset));
-      });
-    } catch (e) {
-      console.warn("[FreeWave] MediaSession handler error:", e);
-    }
+    const setHandlers = () => {
+      try {
+        ms.setActionHandler("play", () => usePlayerStore.getState().resume());
+        ms.setActionHandler("pause", () => usePlayerStore.getState().pause());
+        ms.setActionHandler("toggleplay", () => usePlayerStore.getState().togglePlay());
+        ms.setActionHandler("nexttrack", () => usePlayerStore.getState().next());
+        ms.setActionHandler("previoustrack", () => usePlayerStore.getState().previous());
+        ms.setActionHandler("seekto", (details: MediaSessionActionDetails) => {
+          if (details.seekTime !== undefined) {
+            usePlayerStore.getState().seekTo(details.seekTime);
+          }
+        });
+      } catch (e) {
+        console.warn("[FreeWave] MediaSession handler error:", e);
+      }
+    };
+
+    setHandlers();
+
+    // YouTube IFrame may override our handlers when a video loads,
+    // so re-assert after a short delay whenever track changes
+    const interval = setInterval(setHandlers, 3000);
+    return () => clearInterval(interval);
   }, []);
 
   // Update playback state
@@ -94,7 +91,7 @@ export function MediaSessionController() {
     } catch {}
   }, [isPlaying]);
 
-  // Update position state (progress bar in lock screen notification)
+  // Update position state (progress bar in notification)
   useEffect(() => {
     if (!navigator.mediaSession) return;
     if (duration > 0 && !isNaN(duration) && isFinite(duration)) {
@@ -107,6 +104,15 @@ export function MediaSessionController() {
       } catch {}
     }
   }, [progress, duration]);
+
+  // Re-assert metadata when playback state changes (YouTube may override)
+  useEffect(() => {
+    if (currentTrack && isPlaying) {
+      // Small delay to let YouTube set its session, then override
+      const t = setTimeout(() => updateMetadata(currentTrack), 500);
+      return () => clearTimeout(t);
+    }
+  }, [currentTrack?.id, isPlaying, currentTrack, updateMetadata]);
 
   return null;
 }
