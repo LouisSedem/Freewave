@@ -46,3 +46,24 @@ Stage Summary:
 - PlaybackEngine: deployed, always-mounted, #yt-player div exists on all viewports
 - Cannot test actual YouTube iframe in headless browser (known limitation)
 
+---
+Task ID: 1
+Agent: Main Agent
+Task: UI/UX overhaul - fullscreen player, playlists, mobile-first upgrades
+
+Work Log:
+- Audited entire codebase: layout, components, store, API routes, styles
+- Created /src/components/player/fullscreen-player.tsx - fullscreen overlay with large artwork, touch-draggable progress bar, shuffle/repeat, queue view, favorite toggle
+- Rewrote /src/components/layout/mobile-nav.tsx - swipe-up gesture to open fullscreen, progress bar on mini player top edge, improved touch targets
+- Rewrote /src/app/page.tsx - AddToPlaylistSheet bottom sheet, PlaylistDetailView, playlist CRUD in Library, add-to-playlist on every track row, mobile-first touch targets, reordered home layout
+- Created /src/app/api/playlists/tracks/route.ts - GET/POST/DELETE for playlist tracks
+- Updated /src/app/api/favorites/route.ts - Added ?trackId= query param support
+- Updated /src/app/globals.css - Added @keyframes pulse, safe-area-inset support
+- Updated /src/components/layout/app-layout.tsx - Adjusted padding
+- Build successful, pushed to master, Vercel deployed, API endpoint confirmed live
+
+Stage Summary:
+- Fullscreen player with tap/swipe-up gesture, large artwork, full controls, queue view
+- Complete playlist system: create, add tracks, view detail, remove tracks, delete
+- Mobile-first: 44px+ touch targets, active:scale feedback, draggable progress bars
+- All code deployed to production at freewave-gamma.vercel.app
