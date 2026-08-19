@@ -6,6 +6,9 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { PlayerBar } from "@/components/player/player-bar";
 import { PlaybackEngine } from "@/components/player/playback-engine";
+import { MediaSessionController } from "@/components/player/media-session-controller";
+import { PwaRegister } from "@/components/pwa-register";
+import { PwaInstallPrompt } from "@/components/pwa-install-prompt";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -14,8 +17,11 @@ interface AppLayoutProps {
 export function AppLayout({ children }: AppLayoutProps) {
   return (
     <div className="h-[100dvh] flex flex-col bg-[#121212] text-white overflow-hidden">
+      <PwaRegister />
       {/* Always-mounted playback engine (handles YouTube + iTunes audio) */}
       <PlaybackEngine />
+      {/* Media Session for lock screen controls + background playback */}
+      <MediaSessionController />
 
       {/* Main content area */}
       <div className="flex flex-1 overflow-hidden">
@@ -32,6 +38,9 @@ export function AppLayout({ children }: AppLayoutProps) {
 
       {/* Mobile bottom navigation (UI only) */}
       <MobileNav />
+
+      {/* PWA install prompt */}
+      <PwaInstallPrompt />
     </div>
   );
 }

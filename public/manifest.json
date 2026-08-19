@@ -1,17 +1,25 @@
 {
-  "name": "FreeWave",
+  "name": "FreeWave — Stream Free Music",
   "short_name": "FreeWave",
-  "description": "Stream free music online",
+  "description": "Stream free music online with background playback",
   "start_url": "/",
   "display": "standalone",
+  "orientation": "portrait",
   "theme_color": "#121212",
   "background_color": "#121212",
+  "categories": ["music", "entertainment"],
   "icons": [
     {
       "src": "/favicon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
   ]
 }
